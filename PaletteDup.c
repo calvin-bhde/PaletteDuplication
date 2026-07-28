@@ -34,16 +34,16 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    char *sCoverFile;
-    char *sMessageFile;
-    char *sStegoFile;
-    int iBitsPerPixel;
+    char *sCoverFile = NULL;
+    char *sMessageFile = NULL;
+    char *sStegoFile = NULL;
+    int iBitsPerPixel = 0;
     bool bIsRandomMessage = false;
 
     // read and parse arguments
     for (int i = 2; i < argc; i++)
     {
-        if (strcmp(argv[i], "-c")) // cover file
+        if (strcmp(argv[i], "-c") == 0) // cover file
         {
             i++;
             if (i < argc)
@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
                 return 1;
             }
         }
-        else if (strcmp(argv[i], "-o")) // stego file
+        else if (strcmp(argv[i], "-o") == 0) // stego file
         {
             i++;
             if (i < argc)
@@ -67,12 +67,12 @@ int main(int argc, char *argv[])
                 return 1;
             }
         }
-        else if (strcmp(argv[i], "-m")) // message data (or random)
+        else if (strcmp(argv[i], "-m") == 0) // message data (or random)
         {
             i++;
             if (i < argc)
             {
-                if (strcmp(argv[i], "random"))
+                if (strcmp(argv[i], "random") == 0)
                     bIsRandomMessage = true;
                 else
                     sMessageFile = argv[i];
@@ -86,7 +86,7 @@ int main(int argc, char *argv[])
                 return 1;
             }
         }
-        else if (strcmp(argv[i], "-b")) // bits
+        else if (strcmp(argv[i], "-b") == 0) // bits
         {
             i++;
             if (i < argc)
@@ -95,8 +95,24 @@ int main(int argc, char *argv[])
             {
                 printf("Error in arguments: missing bits.\n");
                 printf("   -b <1|2|3>\n");
+                return 1;
             }
         }
+        else
+        {
+            printf("Error: unrecognized argument %s\n", argv[i]);
+            printUsageHelp(argv[0]);
+            return 1;
+        }
+    }
+
+    
+
+    if (iBitsPerPixel < 1 || iBitsPerPixel > 3)
+    {
+        printf("Error: requires bits to be 1, 2, or 3.\n");
+        printf("   -b <1|2|3>\n");
+        return 1;
     }
     
     /****************************************
@@ -106,7 +122,7 @@ int main(int argc, char *argv[])
      H   H   I   D  DD  E    
      H   H  III  DDDD   EEEEE
     ****************************************/
-    if(strcmp(argv[1], "-hide"))
+    if(strcmp(argv[1], "-hide") == 0)
     {
         if (sCoverFile == NULL)
         {
@@ -114,7 +130,7 @@ int main(int argc, char *argv[])
             printUsageHelp(argv[0]);
             return 1;
         }
-        if (sMessageFile == NULL)
+        if (sMessageFile == NULL && !bIsRandomMessage)
         {
             printf("Error: hiding requires message file or \"random\" specified.\n");
             printUsageHelp(argv[0]);
@@ -131,12 +147,36 @@ int main(int argc, char *argv[])
         uint8_t  ui8FileSignature[2];
         uint16_t ui16BitsPerPixel;
         uint32_t ui32Compression;
-        fseek(fpCover, 0, SEEK_SET);
-        fread(ui8FileSignature, 1, 2, fpCover);
-        fseek(fpCover, 28, SEEK_SET);
-        fread(&ui16BitsPerPixel, sizeof(ui16BitsPerPixel), 1, fpCover);
-        fseek(fpCover, 30, SEEK_SET);
-        fread(&ui32Compression, sizeof(ui32Compression), 1, fpCover);
+        if (fseek(fpCover, 0, SEEK_SET) != 0)
+        {
+            printf("Error seeking to start of cover file.\n");
+            return 1;
+        }
+        if (fread(ui8FileSignature, 1, 2, fpCover) != 2)
+        {
+            printf("Error reading cover file signature.\n");
+            return 1;
+        }
+        if (fseek(fpCover, 28, SEEK_SET) != 0)
+        {
+            printf("Error seeking to BitsPerPixel in cover file.\n");
+            return 1;
+        }
+        if (fread(&ui16BitsPerPixel, sizeof(ui16BitsPerPixel), 1, fpCover) != 1)
+        {
+            printf("Error reading cover file BitsPerPixel.\n");
+            return 1;
+        }
+        if (fseek(fpCover, 30, SEEK_SET) != 0)
+        {
+            printf("Error seeking to compression in cover file.\n");
+            return 1;
+        }
+        if (fread(&ui32Compression, sizeof(ui32Compression), 1, fpCover) != 1)
+        {
+            printf("Error reading cover file compression.\n");
+            return 1;
+        }
         if (ui8FileSignature[0] != 'B' || ui8FileSignature[1] != 'M' || 
             ui16BitsPerPixel != 8 || ui32Compression != 0)
         {
@@ -161,27 +201,78 @@ int main(int argc, char *argv[])
         uint32_t ui32PixelOffset;
         uint32_t ui32HeaderSize;
         uint32_t ui32PaletteOffset;
+        int32_t i32CoverWidth;
+        int32_t i32CoverHeight;
         uint32_t ui32CoverWidth;
         uint32_t ui32CoverHeight;
-        fseek(fpCover, 10, SEEK_SET);
-        fread(&ui32PixelOffset, sizeof(ui32PixelOffset), 1, fpCover);
-        fseek(fpCover, 14, SEEK_SET);
-        fread(&ui32HeaderSize, sizeof(ui32HeaderSize), 1, fpCover);
+        if (fseek(fpCover, 10, SEEK_SET) != 0)
+        {
+            printf("Error seeking to PixelOffset in cover file.\n");
+            return 1;
+        }
+        if (fread(&ui32PixelOffset, sizeof(ui32PixelOffset), 1, fpCover) != 1)
+        {
+            printf("Error reading cover file PixelOffset.\n");
+            return 1;
+        }
+        if (fseek(fpCover, 14, SEEK_SET) != 0)
+        {
+            printf("Error seeking to HeaderSize in cover file.\n");
+            return 1;
+        }
+        if (fread(&ui32HeaderSize, sizeof(ui32HeaderSize), 1, fpCover) != 1)
+        {
+            printf("Error reading cover file HeaderSize.\n");
+            return 1;
+        }
         ui32PaletteOffset = 14U + ui32HeaderSize;
-        fseek(fpCover, 18, SEEK_SET);
-        fread(&ui32CoverWidth, sizeof(ui32CoverWidth), 1, fpCover);
-        fseek(fpCover, 22, SEEK_SET);
-        fread(&ui32CoverHeight, sizeof(ui32CoverHeight), 1, fpCover);
+        if (fseek(fpCover, 18, SEEK_SET) != 0)
+        {
+            printf("Error seeking to Image Width in cover file.\n");
+            return 1;
+        }
+        if (fread(&i32CoverWidth, sizeof(i32CoverWidth), 1, fpCover) != 1)
+        {
+            printf("Error reading cover file Image Width.\n");
+            return 1;
+        }
+        if (i32CoverWidth <= 0)
+        {
+            printf("Error: cover file bitmap width must be positive.\n");
+            return 1;
+        }
+        if (fseek(fpCover, 22, SEEK_SET) != 0)
+        {
+            printf("Error seeking to Image Height in cover file.\n");
+            return 1;
+        }
+        if (fread(&i32CoverHeight, sizeof(i32CoverHeight), 1, fpCover) != 1)
+        {
+            printf("Error reading cover file Image Height.\n");
+            return 1;
+        }
+        if (i32CoverHeight == 0 || i32CoverHeight == INT32_MIN)
+        {
+            printf("Error: invalid cover bitmap height.\n");
+            return 1;
+        }
+        ui32CoverWidth = (uint32_t)i32CoverWidth;
+        ui32CoverHeight = (uint32_t)abs(i32CoverHeight);
+
+
         // determine row padding, bitmap pixel row data must be divisible by 4 bytes.
         uint32_t ui32PaddingSize = ((ui32CoverWidth + 3U) / 4U) * 4U - ui32CoverWidth;
-
 
         bool bCoverIndexUsed[256] = {false};
         uint32_t ui32ActivePaletteSize = 0;
         uint8_t ui8PixelIndex;
 
         // loop through cover pixels to count used colors in the palette
-        fseek(fpCover, ui32PixelOffset, SEEK_SET);
+        if (fseek(fpCover, ui32PixelOffset, SEEK_SET) != 0)
+        {
+            printf("Error seeking to PixelOffset in cover file.\n");
+            return 1;
+        }
         for (uint32_t ui32Row = 0; ui32Row < ui32CoverHeight; ui32Row++)
         {
             for (uint32_t ui32Col = 0; ui32Col < ui32CoverWidth; ui32Col++)
@@ -207,9 +298,9 @@ int main(int argc, char *argv[])
 
         
         // if stego filename provided, open for write. else generate name to open
+        char sGeneratedStegoFileName[256];
         if (sStegoFile == NULL)
         {
-            char sGeneratedStegoFileName[256];
             snprintf(sGeneratedStegoFileName, sizeof(sGeneratedStegoFileName), "%s_hide_%d", sCoverFile, iBitsPerPixel);
             sStegoFile = sGeneratedStegoFileName;
         }
@@ -222,7 +313,13 @@ int main(int argc, char *argv[])
         }
 
         // write cover header into stego file
-        uint8_t ui8Header[256];
+        uint8_t *ui8Header = malloc(ui32PaletteOffset);
+        if (ui8Header == NULL)
+        {
+            printf("Error allocating memory for bitmap header.\n");
+            return 1;
+        }
+
         if (fseek(fpCover, 0, SEEK_SET) != 0)
         {
             printf("Error seeking to start of cover file.\n");
@@ -238,6 +335,8 @@ int main(int argc, char *argv[])
             printf("Error writing bitmap header to stego file.\n");
             return 1;
         }
+        free (ui8Header);
+        ui8Header = NULL;
 
         // write cover palette to Stego file 2^iBitsPerPixel times
         uint8_t ui8PaletteEntry[4];
@@ -305,10 +404,22 @@ int main(int argc, char *argv[])
         bool bHideMessageFinished = false;
 
         
-        fseek(fpCover, ui32PixelOffset, SEEK_SET);
-        fseek(fpStego, ui32PixelOffset, SEEK_SET);
+        if (fseek(fpCover, ui32PixelOffset, SEEK_SET) != 0)
+        {
+            printf("Error seeking to start of pixel data in cover file.\n");
+            return 1;
+        }
+        if (fseek(fpStego, ui32PixelOffset, SEEK_SET) != 0)
+        {
+            printf("Error seeking to start of pixel data in stego file.\n");
+            return 1;
+        }
         if (!bIsRandomMessage)
-            fseek(fpMessage, 0, SEEK_SET);
+            if (fseek(fpMessage, 0, SEEK_SET) != 0)
+            {
+                printf("Error seeking to start of message file.\n");
+                return 1;
+            }
 
         // loop through cover pixels, modify indexes to hide message and write to stego
         for (uint32_t ui32Row = 0; ui32Row < ui32CoverHeight; ui32Row++)
@@ -427,8 +538,16 @@ int main(int argc, char *argv[])
             for (uint32_t i = 0; i < ui32PaddingSize; i++)
             {
                 uint8_t ui8PaddingByte;
-                fread(&ui8PaddingByte, 1, 1, fpCover);
-                fwrite(&ui8PaddingByte, 1, 1, fpStego);
+                if (fread(&ui8PaddingByte, 1, 1, fpCover) != 1)
+                {
+                    printf("Error reading padding byte from cover file.\n");
+                    return 1;
+                }
+                if (fwrite(&ui8PaddingByte, 1, 1, fpStego) != 1)
+                {
+                    printf("Error writing padding byte to stego file.\n");
+                    return 1;
+                }
             }
         }
 
@@ -446,7 +565,7 @@ int main(int argc, char *argv[])
      E     XX XX   T   R  R  A   A C   C   T  
      EEEEE X   X   T   R   R A   A  CCC    T  
     ****************************************/
-    else if(strcmp(argv[1], "-extract"))
+    else if(strcmp(argv[1], "-extract") == 0)
     {
         FILE *fileStego = fopen(sStegoFile, "rb");
     }
