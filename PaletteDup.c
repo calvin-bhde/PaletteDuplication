@@ -12,17 +12,17 @@ void printUsageHelp(char * prog)
     printf("   -hide                         To Hide Data Inside an 8-bit Bitmap\n");
     printf("   -extract                      To Extract Hidden Data\n");
     printf("\n");
-    printf("Options:");
+    printf("Options:\n");
     printf("   -m <message file|random>      File to Hide, \"random\" Will Randomize Hidden Message\n");
     printf("   -c <cover file>               8-bit Paletted Bitmap File To Hide In\n");
     printf("   -o <stego file>               Stego File Name to Output or Extract From (optional when hiding)\n");
     printf("   -b <bits per pixel (1-3)>     Number of Bits Hidden Per Pixel In Stego File\n");
     printf("\n");
-    printf("To Hide Data Inside an 8-bit Paletted Bitmmap:\n");
+    printf("To Hide Data Inside an 8-bit Paletted Bitmap:\n");
     printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-o <output file>]\n", prog);
     printf("\n");
     printf("To Extract Previously Hidden Data:\n");
-    printf("   %s -hide -o <stego file> -b <1|2|3>\n", prog);
+    printf("   %s -extract -o <stego file> -b <1|2|3>\n", prog);
 }
 
 int main(int argc, char *argv[])
@@ -108,12 +108,7 @@ int main(int argc, char *argv[])
 
     
 
-    if (iBitsPerPixel < 1 || iBitsPerPixel > 3)
-    {
-        printf("Error: requires bits to be 1, 2, or 3.\n");
-        printf("   -b <1|2|3>\n");
-        return 1;
-    }
+    
     
     /****************************************
      H   H  III  DDDD   EEEEE
@@ -133,6 +128,12 @@ int main(int argc, char *argv[])
         if (sMessageFile == NULL && !bIsRandomMessage)
         {
             printf("Error: hiding requires message file or \"random\" specified.\n");
+            printUsageHelp(argv[0]);
+            return 1;
+        }
+        if (iBitsPerPixel < 1 || iBitsPerPixel > 3)
+        {
+            printf("Error: hiding requires specified bits per pixel.\n");
             printUsageHelp(argv[0]);
             return 1;
         }
@@ -301,7 +302,7 @@ int main(int argc, char *argv[])
         char sGeneratedStegoFileName[256];
         if (sStegoFile == NULL)
         {
-            snprintf(sGeneratedStegoFileName, sizeof(sGeneratedStegoFileName), "%s_hide_%d", sCoverFile, iBitsPerPixel);
+            snprintf(sGeneratedStegoFileName, sizeof(sGeneratedStegoFileName), "%s_hide_%d.bmp", sCoverFile, iBitsPerPixel);
             sStegoFile = sGeneratedStegoFileName;
         }
         FILE *fpStego;
@@ -323,16 +324,19 @@ int main(int argc, char *argv[])
         if (fseek(fpCover, 0, SEEK_SET) != 0)
         {
             printf("Error seeking to start of cover file.\n");
+            free (ui8Header);
             return 1;
         }
         if (fread(ui8Header, 1, ui32PaletteOffset, fpCover) != ui32PaletteOffset)
         {
             printf("Error reading cover bitmap header.\n");
+            free (ui8Header);
             return 1;
         }
         if (fwrite(ui8Header, 1, ui32PaletteOffset, fpStego) != ui32PaletteOffset)
         {
             printf("Error writing bitmap header to stego file.\n");
+            free (ui8Header);
             return 1;
         }
         free (ui8Header);
@@ -388,7 +392,13 @@ int main(int argc, char *argv[])
                 printf("Error seeking in message file.\n");
                 return 1;
             }
-            uint64_t ui64MessageCapacityBits = (uint64_t)ftell(fpMessage) * 8U;
+            long lMessageSize = ftell(fpMessage);
+            if (lMessageSize < 0)
+            {
+                printf("Error getting size of message file.\n");
+                return 1;
+            }
+            uint64_t ui64MessageCapacityBits = (uint64_t)lMessageSize * 8U;
             ui64TotalHideBits = (ui64MessageCapacityBits < ui64CoverCapacityBits) ? ui64MessageCapacityBits : ui64CoverCapacityBits;
         }
         else
@@ -501,7 +511,14 @@ int main(int argc, char *argv[])
                             else
                             {
                                 if (fread(&ui8MessageByte, 1, 1, fpMessage) != 1)
+                                {
+                                    if (ferror(fpMessage))
+                                    {
+                                        printf("Error reading message file.\n");
+                                        return 1;
+                                    }
                                     bHideMessageFinished = true;
+                                }
                                 else
                                     iMessageBitsRemaining = 8;
                             }
@@ -556,7 +573,7 @@ int main(int argc, char *argv[])
         if (!bIsRandomMessage)
             fclose(fpMessage);
 
-        printf("Palette Duplication with %d bits performed successfully and saved at %s\n",iBitsPerPixel,sStegoFile);
+        printf("Palette Duplication with %d bits performed successfully and saved at %s\n", iBitsPerPixel, sStegoFile);
     }
     /****************************************
      EEEEE X   X TTTTT RRRR   AAA   CCC  TTTTT
