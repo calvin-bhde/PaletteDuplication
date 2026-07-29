@@ -17,20 +17,24 @@ void printUsageHelp(char * prog)
     printf("Usage: %s [operation] [options]\n", prog);
     printf("\n");
     printf("Operations:\n");
-    printf("   -hide                         To Hide Data Inside an 8-bit Bitmap\n");
-    printf("   -extract                      To Extract Hidden Data\n");
+    printf("   -hide                         To hide file data inside an 8-bit paletted bitmap\n");
+    printf("   -extract                      To extract previously hidden data\n");
+    printf("   -capacity                     Displays color palette capacity for hiding data with different bits per pixel\n");
     printf("\n");
     printf("Options:\n");
-    printf("   -m <message file|random>      File to Hide, \"random\" Will Randomize Hidden Message\n");
-    printf("   -c <cover file>               8-bit Paletted Bitmap File To Hide In\n");
-    printf("   -o <stego file>               Stego File Name to Output or Extract From (optional when hiding)\n");
-    printf("   -b <bits per pixel (1-3)>     Number of Bits Hidden Per Pixel In Stego File\n");
+    printf("   -m <message file|random>      File to hide, \"random\" will randomize hidden message\n");
+    printf("   -c <cover file>               8-bit paletted bitmap file to hide in\n");
+    printf("   -o <stego file>               Stego file name to output or extract from (optional when hiding)\n");
+    printf("   -b <bits per pixel (1-3)>     Number of bits hidden per pixel in stego file\n");
     printf("\n");
-    printf("To Hide Data Inside an 8-bit Paletted Bitmap:\n");
+    printf("To hide file data inside an 8-bit paletted bitmap:\n");
     printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-o <output file>]\n", prog);
     printf("\n");
-    printf("To Extract Previously Hidden Data:\n");
+    printf("To extract previously hidden data:\n");
     printf("   %s -extract -o <stego file> -b <1|2|3>\n", prog);
+    printf("\n");
+    printf("To display color palette capacity for a candidate cover file:\n");
+    printf("   %s -capacity -c <cover file>\n", prog);
 }
 
 int main(int argc, char *argv[])
@@ -248,6 +252,7 @@ int main(int argc, char *argv[])
 
         uint32_t ui32PaletteGroups = 1U << iBitsPerPixel;
         uint32_t ui32StegoPaletteSize = ui32ActivePaletteSize * ui32PaletteGroups;
+        uint32_t ui32StegoPixelOffset = ui32CoverPaletteOffset + (ui32StegoPaletteSize * 4U);
         
         // if stego filename provided, open for write. else generate name to open
         char sGeneratedStegoFileName[256];
@@ -279,8 +284,14 @@ int main(int argc, char *argv[])
             free (ui8Header);
             return 1;
         }
+        uint32_t ui32RowSize = ui32CoverWidth + ui32PaddingSize;
+        uint32_t ui32StegoImageSize = ui32RowSize * ui32CoverHeight;
+        uint32_t ui32StegoFileSize = ui32StegoPixelOffset + ui32StegoImageSize;
 
-        // store stego palette entries in biClrUsed field of header
+        // store stego pixel offset, stego image size, and stego palette size in header
+        memcpy(&ui8Header[2], &ui32StegoFileSize, sizeof(ui32StegoFileSize));
+        memcpy(&ui8Header[10], &ui32StegoPixelOffset, sizeof(ui32StegoPixelOffset));
+        memcpy(&ui8Header[34], &ui32StegoImageSize, sizeof(ui32StegoImageSize));
         memcpy(&ui8Header[46], &ui32StegoPaletteSize, sizeof(ui32StegoPaletteSize));
 
         if (fwrite(ui8Header, 1, ui32CoverPaletteOffset, fpStego) != ui32CoverPaletteOffset)
@@ -366,7 +377,7 @@ int main(int argc, char *argv[])
             printf("Error seeking to start of pixel data in cover file.\n");
             return 1;
         }
-        if (fseek(fpStego, ui32CoverPixelOffset, SEEK_SET) != 0)
+        if (fseek(fpStego, ui32StegoPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to start of pixel data in stego file.\n");
             return 1;
@@ -840,6 +851,141 @@ int main(int argc, char *argv[])
 
         printf("Extracted %llu hidden bits to %s\n", (unsigned long long)ui64HiddenSizeBits, sExtractedFileName);
         free(sExtractedFileName);
+    }
+    else if (strcmp(argv[1], "-capacity") == 0)
+    {
+        if (sCoverFile == NULL)
+        {
+            printf("Error: capacity requires a cover file.\n");
+            printUsageHelp(argv[0]);
+            return 1;
+        }
+
+        FILE *fpCover = fopen(sCoverFile, "rb");
+        if (fpCover == NULL)
+        {
+            printf("Error opening cover file %s\n", sCoverFile);
+            return 1;
+        }
+
+        uint8_t  ui8FileSignature[2];
+        uint16_t ui16CoverBitsPerPixel;
+        uint32_t ui32CoverCompression;
+        uint32_t ui32CoverPixelOffset;
+        int32_t  i32CoverWidth;
+        int32_t  i32CoverHeight;
+
+        if (fseek(fpCover, 0, SEEK_SET) != 0 ||
+            fread(ui8FileSignature, 1, 2, fpCover) != 2 ||
+            fseek(fpCover, 10, SEEK_SET) != 0 ||
+            fread(&ui32CoverPixelOffset, sizeof(ui32CoverPixelOffset), 1, fpCover) != 1 ||
+            fseek(fpCover, 18, SEEK_SET) != 0 ||
+            fread(&i32CoverWidth, sizeof(i32CoverWidth), 1, fpCover) != 1 ||
+            fseek(fpCover, 22, SEEK_SET) != 0 ||
+            fread(&i32CoverHeight, sizeof(i32CoverHeight), 1, fpCover) != 1 ||
+            fseek(fpCover, 28, SEEK_SET) != 0 ||
+            fread(&ui16CoverBitsPerPixel, sizeof(ui16CoverBitsPerPixel), 1, fpCover) != 1 ||
+            fseek(fpCover, 30, SEEK_SET) != 0 ||
+            fread(&ui32CoverCompression, sizeof(ui32CoverCompression), 1, fpCover) != 1)
+        {
+            printf("Error reading bitmap header.\n");
+            fclose(fpCover);
+            return 1;
+        }
+
+        if (ui8FileSignature[0] != 'B' ||
+            ui8FileSignature[1] != 'M' ||
+            ui16CoverBitsPerPixel != 8 ||
+            ui32CoverCompression != 0 ||
+            i32CoverWidth <= 0 ||
+            i32CoverHeight == 0 ||
+            i32CoverHeight == INT32_MIN)
+        {
+            printf("Error: capacity requires an uncompressed 8-bit bitmap cover file.\n");
+            fclose(fpCover);
+            return 1;
+        }
+
+        uint32_t ui32CoverWidth = (uint32_t)i32CoverWidth;
+        uint32_t ui32CoverHeight = (uint32_t)abs(i32CoverHeight);
+
+        uint32_t ui32PaddingSize = ((ui32CoverWidth + 3U) / 4U) * 4U - ui32CoverWidth;
+
+        bool bCoverIndexUsed[256] = {false};
+        uint32_t ui32ActivePaletteSize = 0;
+
+        if (fseek(fpCover, ui32CoverPixelOffset, SEEK_SET) != 0)
+        {
+            printf("Error seeking to bitmap pixel data.\n");
+            fclose(fpCover);
+            return 1;
+        }
+
+        for (uint32_t ui32Row = 0;
+            ui32Row < ui32CoverHeight;
+            ui32Row++)
+        {
+            for (uint32_t ui32Col = 0;
+                ui32Col < ui32CoverWidth;
+                ui32Col++)
+            {
+                uint8_t ui8PixelIndex;
+
+                if (fread(&ui8PixelIndex, 1, 1, fpCover) != 1)
+                {
+                    printf("Error reading bitmap pixel data.\n");
+                    fclose(fpCover);
+                    return 1;
+                }
+
+                if (!bCoverIndexUsed[ui8PixelIndex])
+                {
+                    bCoverIndexUsed[ui8PixelIndex] = true;
+                    ui32ActivePaletteSize++;
+                }
+            }
+
+            if (fseek(fpCover, ui32PaddingSize, SEEK_CUR) != 0)
+            {
+                printf("Error seeking past bitmap row padding.\n");
+                fclose(fpCover);
+                return 1;
+            }
+        }
+
+        fclose(fpCover);
+
+        int iMaxBitsPerPixel = 0;
+
+        if (ui32ActivePaletteSize <= 32U) iMaxBitsPerPixel = 3;
+        else if (ui32ActivePaletteSize <= 64U) iMaxBitsPerPixel = 2;
+        else if (ui32ActivePaletteSize <= 128U) iMaxBitsPerPixel = 1;
+
+        printf("File: %s\n", sCoverFile);
+
+        if (iMaxBitsPerPixel == 0)
+        {
+            printf("Active Colors: %u (too many for palette duplication)\n", ui32ActivePaletteSize);
+            return 0;
+        }
+
+        printf("Active Colors: %u (max %d-bit hiding)\n", ui32ActivePaletteSize, iMaxBitsPerPixel);
+
+        uint64_t ui64PixelCount = (uint64_t)ui32CoverWidth * (uint64_t)ui32CoverHeight;
+
+        for (int iBits = 1; iBits <= iMaxBitsPerPixel; iBits++)
+        {
+            uint64_t ui64CapacityBits =
+                ui64PixelCount * (uint64_t)iBits;
+
+            // the first 64 hidden bits store the message size
+            uint64_t ui64CapacityBytes = 0;
+
+            if (ui64CapacityBits > 64U)
+                ui64CapacityBytes = (ui64CapacityBits - 64U) / 8U;
+
+            printf("-b %d capacity: %llu bytes\n", iBits, (unsigned long long)ui64CapacityBytes);
+        }
     }
     else
     {
