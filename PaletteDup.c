@@ -24,14 +24,15 @@ void printUsageHelp(char * prog)
     printf("Options:\n");
     printf("   -m <message file|random>      File to hide, \"random\" will randomize hidden message\n");
     printf("   -c <cover file>               8-bit paletted bitmap file to hide in\n");
-    printf("   -o <stego file>               Stego file name to output or extract from (optional when hiding)\n");
+    printf("   -o <output file>              Stego file name to output (optional when hiding)\n");
+    printf("   -s <stego file>               Stego file for extraction\n");
     printf("   -b <bits per pixel (1-3)>     Number of bits hidden per pixel in stego file\n");
     printf("\n");
     printf("To hide file data inside an 8-bit paletted bitmap:\n");
-    printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-o <output file>]\n", prog);
+    printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-s <stego output file>]\n", prog);
     printf("\n");
     printf("To extract previously hidden data:\n");
-    printf("   %s -extract -o <stego file> -b <1|2|3>\n", prog);
+    printf("   %s -extract -s <stego file> -b <1|2|3>\n", prog);
     printf("\n");
     printf("To display color palette capacity for a candidate cover file:\n");
     printf("   %s -capacity -c <cover file>\n", prog);
@@ -48,6 +49,7 @@ int main(int argc, char *argv[])
 
     char *sCoverFile = NULL;
     char *sMessageFile = NULL;
+    char *sOutputFile = NULL;
     char *sStegoFile = NULL;
     int iBitsPerPixel = 0;
     bool bIsRandomMessage = false;
@@ -67,7 +69,7 @@ int main(int argc, char *argv[])
                 return 1;
             }
         }
-        else if (strcmp(argv[i], "-o") == 0) // stego file
+        else if (strcmp(argv[i], "-s") == 0) // stego file
         {
             i++;
             if (i < argc)
@@ -75,7 +77,19 @@ int main(int argc, char *argv[])
             else
             {
                 printf("Error in arguments: missing stego file.\n");
-                printf("   -o <stego file>\n");
+                printf("   -s <stego file>\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "-o") == 0) // output file
+        {
+            i++;
+            if (i < argc)
+                sOutputFile = argv[i];
+            else
+            {
+                printf("Error in arguments: missing output file.\n");
+                printf("   -o <output file>\n");
                 return 1;
             }
         }
@@ -254,18 +268,17 @@ int main(int argc, char *argv[])
         uint32_t ui32StegoPaletteSize = ui32ActivePaletteSize * ui32PaletteGroups;
         uint32_t ui32StegoPixelOffset = ui32CoverPaletteOffset + (ui32StegoPaletteSize * 4U);
         
-        // if stego filename provided, open for write. else generate name to open
-        char sGeneratedStegoFileName[256];
-        if (sStegoFile == NULL)
+        // if output filename provided, open for write. else generate name to open
+        char sGeneratedOutputFileName[256];
+        if (sOutputFile == NULL)
         {
-            snprintf(sGeneratedStegoFileName, sizeof(sGeneratedStegoFileName), "%s_hide_%d.bmp", sCoverFile, iBitsPerPixel);
-            sStegoFile = sGeneratedStegoFileName;
+            snprintf(sGeneratedOutputFileName, sizeof(sGeneratedOutputFileName), "%s_hide_%d.bmp", sCoverFile, iBitsPerPixel);
+            sOutputFile = sGeneratedOutputFileName;
         }
-        FILE *fpStego;
-        fpStego = fopen(sStegoFile, "wb");
-        if (fpStego == NULL)
+        FILE *fpOutput = fopen(sOutputFile, "wb");
+        if (fpOutput == NULL)
         {
-            printf("Error opening stego file for writing %s\n", sStegoFile);
+            printf("Error opening output file for writing %s\n", sOutputFile);
             return 1;
         }
 
@@ -294,9 +307,9 @@ int main(int argc, char *argv[])
         memcpy(&ui8Header[34], &ui32StegoImageSize, sizeof(ui32StegoImageSize));
         memcpy(&ui8Header[46], &ui32StegoPaletteSize, sizeof(ui32StegoPaletteSize));
 
-        if (fwrite(ui8Header, 1, ui32CoverPaletteOffset, fpStego) != ui32CoverPaletteOffset)
+        if (fwrite(ui8Header, 1, ui32CoverPaletteOffset, fpOutput) != ui32CoverPaletteOffset)
         {
-            printf("Error writing bitmap header to stego file.\n");
+            printf("Error writing bitmap header to output file.\n");
             free (ui8Header);
             return 1;
         }
@@ -320,12 +333,12 @@ int main(int argc, char *argv[])
                         printf("Error copying palette entry in cover file.\n");
                         return 1;
                     }
-                    if (fwrite(ui8PaletteEntry, 1, 4, fpStego) != 4)
+                    if (fwrite(ui8PaletteEntry, 1, 4, fpOutput) != 4)
                     {
-                        printf("Error writing palette entry in stego file.\n");
+                        printf("Error writing palette entry in output file.\n");
                         return 1;
                     }
-                    // pixel index i in cover file changes to newIndex in stego file
+                    // pixel index i in cover file changes to newIndex in output file
                     ui8CoverToStegoIndexRemap[paletteNum][i] = newIndex++; 
                 }
             }
@@ -334,6 +347,7 @@ int main(int argc, char *argv[])
 
         // get total size of hidden data
         uint64_t ui64TotalHideBits = 0;
+        uint64_t ui64OriginalMessageBits = 0;
         uint64_t ui64CoverCapacityBits = (uint64_t)ui32CoverWidth * (uint64_t)ui32CoverHeight * (uint64_t)iBitsPerPixel;
         if (ui64CoverCapacityBits < 64U)
         {
@@ -355,8 +369,8 @@ int main(int argc, char *argv[])
                 printf("Error getting size of message file.\n");
                 return 1;
             }
-            uint64_t ui64MessageCapacityBits = (uint64_t)lMessageSize * 8U;
-            ui64TotalHideBits = (ui64MessageCapacityBits < ui64CoverCapacityBits) ? ui64MessageCapacityBits : ui64CoverCapacityBits;
+            ui64OriginalMessageBits = (uint64_t)lMessageSize * 8U;
+            ui64TotalHideBits = (ui64OriginalMessageBits < ui64CoverCapacityBits) ? ui64OriginalMessageBits : ui64CoverCapacityBits;
         }
         else
         {
@@ -377,9 +391,9 @@ int main(int argc, char *argv[])
             printf("Error seeking to start of pixel data in cover file.\n");
             return 1;
         }
-        if (fseek(fpStego, ui32StegoPixelOffset, SEEK_SET) != 0)
+        if (fseek(fpOutput, ui32StegoPixelOffset, SEEK_SET) != 0)
         {
-            printf("Error seeking to start of pixel data in stego file.\n");
+            printf("Error seeking to start of pixel data in output file.\n");
             return 1;
         }
         if (!bIsRandomMessage)
@@ -439,9 +453,9 @@ int main(int argc, char *argv[])
                     
                     // assign pixel to palette matching value to hide
                     ui8StegoPixelIndex = ui8CoverToStegoIndexRemap[ui8HiddenValue][ui8CoverPixelIndex];
-                    if (fwrite(&ui8StegoPixelIndex, sizeof(ui8StegoPixelIndex), 1, fpStego) != 1)
+                    if (fwrite(&ui8StegoPixelIndex, sizeof(ui8StegoPixelIndex), 1, fpOutput) != 1)
                     {
-                        printf("Error writing hidden pixel to stego file.\n");
+                        printf("Error writing hidden pixel to output file.\n");
                         return 1;
                     }
                 }
@@ -503,18 +517,18 @@ int main(int argc, char *argv[])
 
                     // assign pixel to palette matching value to hide
                     ui8StegoPixelIndex = ui8CoverToStegoIndexRemap[ui8HiddenValue][ui8CoverPixelIndex];
-                    if (fwrite(&ui8StegoPixelIndex, sizeof(ui8StegoPixelIndex), 1, fpStego) != 1)
+                    if (fwrite(&ui8StegoPixelIndex, sizeof(ui8StegoPixelIndex), 1, fpOutput) != 1)
                     {
-                        printf("Error writing hidden pixel to stego file.\n");
+                        printf("Error writing hidden pixel to output file.\n");
                         return 1;
                     }
                 }
                 else
                 {
-                    // entire message hidden, write remaining cover to stego file
-                    if (fwrite(&ui8StegoPixelIndex, 1, 1, fpStego) != 1)
+                    // entire message hidden, write remaining cover to output file
+                    if (fwrite(&ui8StegoPixelIndex, 1, 1, fpOutput) != 1)
                     {
-                        printf("Error writing pixel to stego file.\n");
+                        printf("Error writing pixel to output file.\n");
                         return 1;
                     }
                 }
@@ -528,20 +542,34 @@ int main(int argc, char *argv[])
                     printf("Error reading padding byte from cover file.\n");
                     return 1;
                 }
-                if (fwrite(&ui8PaddingByte, 1, 1, fpStego) != 1)
+                if (fwrite(&ui8PaddingByte, 1, 1, fpOutput) != 1)
                 {
-                    printf("Error writing padding byte to stego file.\n");
+                    printf("Error writing padding byte to output file.\n");
                     return 1;
                 }
             }
         }
 
         fclose(fpCover);
-        fclose(fpStego);
+        fclose(fpOutput);
         if (fpMessage != NULL)
             fclose(fpMessage);
 
-        printf("Palette Duplication with %d bits performed successfully and saved at %s\n", iBitsPerPixel, sStegoFile);
+        //printf("Palette Duplication with %d bits performed successfully and saved at %s\n", iBitsPerPixel, sStegoFile);
+        // print more specific message
+        if (bIsRandomMessage)
+        {
+            printf("Successfully hid %llu bits of random data in %s using %d bits per pixel.\n", ui64TotalHideBits, sStegoFile, iBitsPerPixel);
+        }
+        else if (ui64CoverCapacityBits < ui64OriginalMessageBits)
+        {
+            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel. Note: cover file capacity was exceeded, only %llu out of %llu bits (%.2f%%) were hidden.\n", ui64TotalHideBits, sMessageFile, sStegoFile, iBitsPerPixel, ui64CoverCapacityBits, ui64OriginalMessageBits, (double)ui64CoverCapacityBits / ui64OriginalMessageBits * 100);
+        }
+        else
+        {
+            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel.\n", ui64MessageBitsHidden, sMessageFile, sStegoFile, iBitsPerPixel);
+        }
+
     }
     /****************************************
      EEEEE X   X TTTTT RRRR   AAA   CCC  TTTTT
