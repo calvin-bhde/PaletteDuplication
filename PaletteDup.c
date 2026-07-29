@@ -6,6 +6,14 @@
 
 void printUsageHelp(char * prog)
 {
+    // remove full file path from program name if present
+    char *sProgramName = strrchr(prog, '\\');
+    char *sForwardSlash = strrchr(prog, '/');
+    if (sForwardSlash != NULL && (sProgramName == NULL || sForwardSlash > sProgramName))
+        sProgramName = sForwardSlash;
+    if (sProgramName != NULL)
+        prog = sProgramName + 1;
+    
     printf("Usage: %s [operation] [options]\n", prog);
     printf("\n");
     printf("Operations:\n");
