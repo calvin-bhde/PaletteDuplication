@@ -3,6 +3,10 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <inttypes.h>
+
+// PaletteDup.c - Steganography using palette duplication in 8-bit paletted bitmaps
+// by Project Group 4 - Calvin Bulger, Andrew Martin, Izhin Talamantez
 
 void printUsageHelp(char * prog)
 {
@@ -320,7 +324,7 @@ int main(int argc, char *argv[])
             goto hide_cleanup;
         }
 
-        // write cover palette to Stego file 2^iBitsPerPixel times (one original, 2^iBitsPerPixel duplicates)
+        // write cover palette to Stego file 2^iBitsPerPixel times (one original, 2^iBitsPerPixel - 1 duplicates)
         uint8_t ui8PaletteEntry[4];
         uint8_t ui8CoverToStegoIndexRemap[8][256];
         int newIndex = 0;
@@ -559,15 +563,15 @@ int main(int argc, char *argv[])
         // print more specific message
         if (bIsRandomMessage)
         {
-            printf("Successfully hid %llu bits of random data in %s using %d bits per pixel.\n", ui64TotalHideBits, sOutputFile, iBitsPerPixel);
+            printf("Successfully hid %" PRIu64 " bits of random data in %s using %d bits per pixel.\n", ui64TotalHideBits, sOutputFile, iBitsPerPixel);
         }
         else if (ui64CoverCapacityBits < ui64OriginalMessageBits)
         {
-            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel. Note: cover file capacity was exceeded, only %llu out of %llu bits (%.2f%%) were hidden.\n", ui64TotalHideBits, sMessageFile, sOutputFile, iBitsPerPixel, ui64CoverCapacityBits, ui64OriginalMessageBits, (double)ui64CoverCapacityBits / ui64OriginalMessageBits * 100);
+            printf("Successfully hid %" PRIu64 " bits of data from %s in %s using %d bits per pixel. Note: cover file capacity was exceeded, only %" PRIu64 " out of %" PRIu64 " bits (%.2f%%) were hidden.\n", ui64TotalHideBits, sMessageFile, sOutputFile, iBitsPerPixel, ui64CoverCapacityBits, ui64OriginalMessageBits, (double)ui64CoverCapacityBits / ui64OriginalMessageBits * 100);
         }
         else
         {
-            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel.\n", ui64MessageBitsHidden, sMessageFile, sOutputFile, iBitsPerPixel);
+            printf("Successfully hid %" PRIu64 " bits of data from %s in %s using %d bits per pixel.\n", ui64MessageBitsHidden, sMessageFile, sOutputFile, iBitsPerPixel);
         }
 
         iHideResult = 0;
