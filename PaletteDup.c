@@ -29,7 +29,7 @@ void printUsageHelp(char * prog)
     printf("   -b <bits per pixel (1-3)>     Number of bits hidden per pixel in stego file\n");
     printf("\n");
     printf("To hide file data inside an 8-bit paletted bitmap:\n");
-    printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-s <stego output file>]\n", prog);
+    printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-o <stego output file>]\n", prog);
     printf("\n");
     printf("To extract previously hidden data:\n");
     printf("   %s -extract -s <stego file> -b <1|2|3>\n", prog);
@@ -164,8 +164,14 @@ int main(int argc, char *argv[])
             return 1;
         }
 
+        FILE *fpCover = NULL;
+        FILE *fpMessage = NULL;
+        FILE *fpOutput = NULL;
+        uint8_t *ui8Header = NULL;
+        int iHideResult = 1;
+
         // open cover file
-        FILE *fpCover = fopen(sCoverFile, "rb");
+        fpCover = fopen(sCoverFile, "rb");
         if (fpCover == NULL)
         {
             printf("Error opening cover file %s\n", sCoverFile);
@@ -173,14 +179,13 @@ int main(int argc, char *argv[])
         }
 
         // open message file if provided
-        FILE *fpMessage = NULL;
         if (!bIsRandomMessage)
         {
             fpMessage = fopen(sMessageFile, "rb");
             if(fpMessage == NULL)
             {
                 printf("Error opening message file %s\n", sMessageFile);
-                return 1;
+                goto hide_cleanup;
             }
         }
 
@@ -210,8 +215,7 @@ int main(int argc, char *argv[])
             fread(&ui32CoverCompression, sizeof(ui32CoverCompression), 1, fpCover) != 1)
         {
             printf("Error reading stego bitmap header.\n");
-            fclose(fpCover);
-            return 1;
+            goto hide_cleanup;
         }
         ui32CoverPaletteOffset = 14U + ui32CoverHeaderSize;
 
@@ -221,8 +225,7 @@ int main(int argc, char *argv[])
             i32CoverWidth <= 0 || i32CoverHeight == 0 || i32CoverHeight == INT32_MIN)
         {
             printf("Error: hiding requires an uncompressed 8-bit bitmap cover file.\n");
-            fclose(fpCover);
-            return 1;
+            goto hide_cleanup;
         }
         
 
@@ -239,7 +242,7 @@ int main(int argc, char *argv[])
         if (fseek(fpCover, ui32CoverPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to PixelOffset in cover file.\n");
-            return 1;
+            goto hide_cleanup;
         }
         for (uint32_t ui32Row = 0; ui32Row < ui32CoverHeight; ui32Row++)
         {
@@ -248,7 +251,7 @@ int main(int argc, char *argv[])
                 if (fread(&ui8PixelIndex, sizeof(ui8PixelIndex), 1, fpCover) != 1)
                 {
                     printf("Error reading bitmap pixel data.\n");
-                    return 1;
+                    goto hide_cleanup;
                 }
                 if (!bCoverIndexUsed[ui8PixelIndex])
                 {
@@ -260,13 +263,18 @@ int main(int argc, char *argv[])
             if(fseek(fpCover, ui32PaddingSize, SEEK_CUR) != 0)
             {
                 printf("Error seeking past row padding in cover file.\n");
-                return 1;
+                goto hide_cleanup;
             }
         }
 
         uint32_t ui32PaletteGroups = 1U << iBitsPerPixel;
         uint32_t ui32StegoPaletteSize = ui32ActivePaletteSize * ui32PaletteGroups;
         uint32_t ui32StegoPixelOffset = ui32CoverPaletteOffset + (ui32StegoPaletteSize * 4U);
+        if (ui32StegoPaletteSize > 256U)
+        {
+            printf("Error: %u active colors cannot support %d-bit hiding. The duplicated palette would require %u entries.\n", ui32ActivePaletteSize, iBitsPerPixel, ui32StegoPaletteSize);
+            goto hide_cleanup;
+        }
         
         // if output filename provided, open for write. else generate name to open
         char sGeneratedOutputFileName[256];
@@ -275,27 +283,26 @@ int main(int argc, char *argv[])
             snprintf(sGeneratedOutputFileName, sizeof(sGeneratedOutputFileName), "%s_hide_%d.bmp", sCoverFile, iBitsPerPixel);
             sOutputFile = sGeneratedOutputFileName;
         }
-        FILE *fpOutput = fopen(sOutputFile, "wb");
+        fpOutput = fopen(sOutputFile, "wb");
         if (fpOutput == NULL)
         {
             printf("Error opening output file for writing %s\n", sOutputFile);
-            return 1;
+            goto hide_cleanup;
         }
 
         // write cover header into stego file
-        uint8_t *ui8Header = malloc(ui32CoverPaletteOffset);
+        ui8Header = malloc(ui32CoverPaletteOffset);
         if (ui8Header == NULL)
         {
             printf("Error allocating memory for bitmap header.\n");
-            return 1;
+            goto hide_cleanup;
         }
 
         if (fseek(fpCover, 0, SEEK_SET) != 0 ||
             fread(ui8Header, 1, ui32CoverPaletteOffset, fpCover) != ui32CoverPaletteOffset)
         {
             printf("Error copying bitmap header from start of cover file.\n");
-            free (ui8Header);
-            return 1;
+            goto hide_cleanup;
         }
         uint32_t ui32RowSize = ui32CoverWidth + ui32PaddingSize;
         uint32_t ui32StegoImageSize = ui32RowSize * ui32CoverHeight;
@@ -310,11 +317,8 @@ int main(int argc, char *argv[])
         if (fwrite(ui8Header, 1, ui32CoverPaletteOffset, fpOutput) != ui32CoverPaletteOffset)
         {
             printf("Error writing bitmap header to output file.\n");
-            free (ui8Header);
-            return 1;
+            goto hide_cleanup;
         }
-        free (ui8Header);
-        ui8Header = NULL;
 
         // write cover palette to Stego file 2^iBitsPerPixel times (one original, 2^iBitsPerPixel duplicates)
         uint8_t ui8PaletteEntry[4];
@@ -327,19 +331,20 @@ int main(int argc, char *argv[])
             {
                 if (bCoverIndexUsed[i])
                 {
-                    if (fseek(fpCover, ui32CoverPaletteOffset + (i * 4), SEEK_SET) != 0 ||
+                    if (fseek(fpCover, ui32CoverPaletteOffset + ((uint32_t)i * 4U), SEEK_SET) != 0 ||
                         fread(ui8PaletteEntry, 1, 4, fpCover) != 4)
                     {
                         printf("Error copying palette entry in cover file.\n");
-                        return 1;
+                        goto hide_cleanup;
                     }
                     if (fwrite(ui8PaletteEntry, 1, 4, fpOutput) != 4)
                     {
                         printf("Error writing palette entry in output file.\n");
-                        return 1;
+                        goto hide_cleanup;
                     }
                     // pixel index i in cover file changes to newIndex in output file
-                    ui8CoverToStegoIndexRemap[paletteNum][i] = newIndex++; 
+                    ui8CoverToStegoIndexRemap[paletteNum][i] = (uint8_t)newIndex;
+                    newIndex++; 
                 }
             }
         }
@@ -352,7 +357,7 @@ int main(int argc, char *argv[])
         if (ui64CoverCapacityBits < 64U)
         {
             printf("Error: cover file is too small to hold size field.\n");
-            return 1;
+            goto hide_cleanup;
         } 
         ui64CoverCapacityBits -= 64U;
 
@@ -361,13 +366,13 @@ int main(int argc, char *argv[])
             if (fseek(fpMessage, 0, SEEK_END) != 0)
             {
                 printf("Error seeking in message file.\n");
-                return 1;
+                goto hide_cleanup;
             }
             long lMessageSize = ftell(fpMessage);
             if (lMessageSize < 0)
             {
                 printf("Error getting size of message file.\n");
-                return 1;
+                goto hide_cleanup;
             }
             ui64OriginalMessageBits = (uint64_t)lMessageSize * 8U;
             ui64TotalHideBits = (ui64OriginalMessageBits < ui64CoverCapacityBits) ? ui64OriginalMessageBits : ui64CoverCapacityBits;
@@ -389,18 +394,18 @@ int main(int argc, char *argv[])
         if (fseek(fpCover, ui32CoverPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to start of pixel data in cover file.\n");
-            return 1;
+            goto hide_cleanup;
         }
         if (fseek(fpOutput, ui32StegoPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to start of pixel data in output file.\n");
-            return 1;
+            goto hide_cleanup;
         }
         if (!bIsRandomMessage)
             if (fseek(fpMessage, 0, SEEK_SET) != 0)
             {
                 printf("Error seeking to start of message file.\n");
-                return 1;
+                goto hide_cleanup;
             }
 
         // loop through cover pixels, modify indexes to hide message and write to stego
@@ -414,7 +419,7 @@ int main(int argc, char *argv[])
                 if (fread(&ui8CoverPixelIndex, sizeof(ui8CoverPixelIndex), 1, fpCover) != 1)
                 {
                     printf("Error reading cover file pixel.\n");
-                    return 1;
+                    goto hide_cleanup;
                 }
                 uint8_t ui8StegoPixelIndex = ui8CoverToStegoIndexRemap[0][ui8CoverPixelIndex];
 
@@ -456,7 +461,7 @@ int main(int argc, char *argv[])
                     if (fwrite(&ui8StegoPixelIndex, sizeof(ui8StegoPixelIndex), 1, fpOutput) != 1)
                     {
                         printf("Error writing hidden pixel to output file.\n");
-                        return 1;
+                        goto hide_cleanup;
                     }
                 }
                 else if (!bHideMessageFinished)
@@ -491,7 +496,7 @@ int main(int argc, char *argv[])
                                     if (ferror(fpMessage))
                                     {
                                         printf("Error reading message file.\n");
-                                        return 1;
+                                        goto hide_cleanup;
                                     }
                                     bHideMessageFinished = true;
                                 }
@@ -520,7 +525,7 @@ int main(int argc, char *argv[])
                     if (fwrite(&ui8StegoPixelIndex, sizeof(ui8StegoPixelIndex), 1, fpOutput) != 1)
                     {
                         printf("Error writing hidden pixel to output file.\n");
-                        return 1;
+                        goto hide_cleanup;
                     }
                 }
                 else
@@ -529,7 +534,7 @@ int main(int argc, char *argv[])
                     if (fwrite(&ui8StegoPixelIndex, 1, 1, fpOutput) != 1)
                     {
                         printf("Error writing pixel to output file.\n");
-                        return 1;
+                        goto hide_cleanup;
                     }
                 }
             }
@@ -540,34 +545,65 @@ int main(int argc, char *argv[])
                 if (fread(&ui8PaddingByte, 1, 1, fpCover) != 1)
                 {
                     printf("Error reading padding byte from cover file.\n");
-                    return 1;
+                    goto hide_cleanup;
                 }
                 if (fwrite(&ui8PaddingByte, 1, 1, fpOutput) != 1)
                 {
                     printf("Error writing padding byte to output file.\n");
-                    return 1;
+                    goto hide_cleanup;
                 }
             }
         }
-
-        fclose(fpCover);
-        fclose(fpOutput);
-        if (fpMessage != NULL)
-            fclose(fpMessage);
 
         //printf("Palette Duplication with %d bits performed successfully and saved at %s\n", iBitsPerPixel, sStegoFile);
         // print more specific message
         if (bIsRandomMessage)
         {
-            printf("Successfully hid %llu bits of random data in %s using %d bits per pixel.\n", ui64TotalHideBits, sStegoFile, iBitsPerPixel);
+            printf("Successfully hid %llu bits of random data in %s using %d bits per pixel.\n", ui64TotalHideBits, sOutputFile, iBitsPerPixel);
         }
         else if (ui64CoverCapacityBits < ui64OriginalMessageBits)
         {
-            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel. Note: cover file capacity was exceeded, only %llu out of %llu bits (%.2f%%) were hidden.\n", ui64TotalHideBits, sMessageFile, sStegoFile, iBitsPerPixel, ui64CoverCapacityBits, ui64OriginalMessageBits, (double)ui64CoverCapacityBits / ui64OriginalMessageBits * 100);
+            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel. Note: cover file capacity was exceeded, only %llu out of %llu bits (%.2f%%) were hidden.\n", ui64TotalHideBits, sMessageFile, sOutputFile, iBitsPerPixel, ui64CoverCapacityBits, ui64OriginalMessageBits, (double)ui64CoverCapacityBits / ui64OriginalMessageBits * 100);
         }
         else
         {
-            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel.\n", ui64MessageBitsHidden, sMessageFile, sStegoFile, iBitsPerPixel);
+            printf("Successfully hid %llu bits of data from %s in %s using %d bits per pixel.\n", ui64MessageBitsHidden, sMessageFile, sOutputFile, iBitsPerPixel);
+        }
+
+        iHideResult = 0;
+
+        hide_cleanup:
+
+        if (ui8Header != NULL)
+        {
+            free(ui8Header);
+            ui8Header = NULL;
+        }
+
+        if (fpMessage != NULL)
+        {
+            fclose(fpMessage);
+            fpMessage = NULL;
+        }
+
+        if (fpOutput != NULL)
+        {
+            fclose(fpOutput);
+            fpOutput = NULL;
+        }
+
+        if (fpCover != NULL)
+        {
+            fclose(fpCover);
+            fpCover = NULL;
+        }
+
+        if (iHideResult != 0)
+        {
+            // remove incomplete output file created before the error
+            if (sOutputFile != NULL)
+                remove(sOutputFile);
+            return 1;
         }
 
     }
@@ -593,12 +629,18 @@ int main(int argc, char *argv[])
             return 1;
         }
 
+        FILE *fpStego = NULL;
+        FILE *fpExtracted = NULL;
+        FILE *fpExisting = NULL;
+        char *sExtractedFileName = NULL;
+        int iExtractResult = 1;
+
         // open stego file
-        FILE *fpStego = fopen(sStegoFile, "rb");
+        fpStego = fopen(sStegoFile, "rb");
         if (fpStego == NULL)
         {
             printf("Error opening stego file %s\n", sStegoFile);
-            return 1;
+            goto extract_cleanup;
         }
 
         // get BMP fields from stego file
@@ -630,8 +672,7 @@ int main(int argc, char *argv[])
             fread(&ui32StegoColorsUsed, sizeof(ui32StegoColorsUsed), 1, fpStego) != 1)
         {
             printf("Error reading stego bitmap header.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         // check stego file is uncompressed 8-bit bitmap and has valid dimensions
@@ -640,8 +681,7 @@ int main(int argc, char *argv[])
             i32StegoWidth <= 0 || i32StegoHeight == 0 || i32StegoHeight == INT32_MIN)
         {
             printf("Error: extraction requires a valid uncompressed 8-bit bitmap.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         // check that palette and pixel offsets are valid
@@ -649,8 +689,7 @@ int main(int argc, char *argv[])
         if (ui32StegoPixelOffset <= ui32StegoPaletteOffset)
         {
             printf("Error: invalid palette or pixel offset in stego bitmap.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         uint32_t ui32StegoWidth = (uint32_t)i32StegoWidth;
@@ -664,16 +703,14 @@ int main(int argc, char *argv[])
         if (ui32StegoColorsUsed == 0 || ui32StegoColorsUsed > 256U)
         {
             printf("Error: invalid stego palette size in biClrUsed.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         // total palette size must divide evenly into 2^bits palette groups
         if (ui32StegoColorsUsed % ui32PaletteGroups != 0)
         {
             printf("Error: stego palette size is incompatible with %d bits per pixel.\n", iBitsPerPixel);
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         uint32_t ui32ActivePaletteSize = ui32StegoColorsUsed / ui32PaletteGroups;
@@ -681,15 +718,13 @@ int main(int argc, char *argv[])
         if (ui32ActivePaletteSize == 0)
         {
             printf("Error: invalid active palette group size.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         if (fseek(fpStego, ui32StegoPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to start of stego pixel data.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         uint64_t ui64HiddenSizeBits = 0;
@@ -705,8 +740,7 @@ int main(int argc, char *argv[])
                 if (fread(&ui8PixelIndex, 1, 1, fpStego) != 1)
                 {
                     printf("Error reading stego size field.\n");
-                    fclose(fpStego);
-                    return 1;
+                    goto extract_cleanup;
                 }
 
                 uint8_t ui8HiddenValue = (uint8_t)(ui8PixelIndex / ui32ActivePaletteSize);
@@ -714,8 +748,7 @@ int main(int argc, char *argv[])
                 if (ui8HiddenValue >= ui32PaletteGroups)
                 {
                     printf("Error: stego pixel index is outside duplicated palette groups.\n");
-                    fclose(fpStego);
-                    return 1;
+                    goto extract_cleanup;
                 }
 
                 for (int i = iBitsPerPixel - 1; i >= 0 && ui64SizeBitsRead < 64U; i--)
@@ -728,27 +761,24 @@ int main(int argc, char *argv[])
             if (ui64SizeBitsRead < 64U && fseek(fpStego, ui32PaddingSize, SEEK_CUR) != 0)
             {
                 printf("Error seeking past stego row padding.\n");
-                fclose(fpStego);
-                return 1;
+                goto extract_cleanup;
             }
         }
 
         if (ui64SizeBitsRead != 64U || ui64HiddenSizeBits > ui64PixelCapacityBits - 64U)
         {
             printf("Error: invalid hidden message size.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
-        char *sExtractedFileName = malloc(strlen(sStegoFile) + 32U);
+        sExtractedFileName = malloc(strlen(sStegoFile) + 32U);
         if (sExtractedFileName == NULL)
         {
             printf("Error allocating extracted filename.\n");
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
-        FILE *fpExtracted = NULL;
+        fpExtracted = NULL;
         unsigned int uiExtractNumber;
         for (uiExtractNumber = 0; ; uiExtractNumber++)
         {
@@ -758,32 +788,28 @@ int main(int argc, char *argv[])
                      sStegoFile,
                      uiExtractNumber);
 
-            FILE *fpExisting = fopen(sExtractedFileName, "rb");
+            fpExisting = fopen(sExtractedFileName, "rb");
             if (fpExisting == NULL)
             {
                 fpExtracted = fopen(sExtractedFileName, "wb");
                 break;
             }
+
             fclose(fpExisting);
+            fpExisting = NULL;
         }
 
         if (fpExtracted == NULL)
         {
             printf("Error opening extracted output file.\n");
-            free(sExtractedFileName);
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         // restart and skip exactly the first 64 hidden bits
         if (fseek(fpStego, ui32StegoPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to stego payload.\n");
-            fclose(fpExtracted);
-            remove(sExtractedFileName);
-            free(sExtractedFileName);
-            fclose(fpStego);
-            return 1;
+            goto extract_cleanup;
         }
 
         uint64_t ui64HiddenBitsSkipped = 0;
@@ -798,11 +824,7 @@ int main(int argc, char *argv[])
                 if (fread(&ui8PixelIndex, 1, 1, fpStego) != 1)
                 {
                     printf("Error reading hidden payload.\n");
-                    fclose(fpExtracted);
-                    remove(sExtractedFileName);
-                    free(sExtractedFileName);
-                    fclose(fpStego);
-                    return 1;
+                    goto extract_cleanup;
                 }
 
                 uint8_t ui8HiddenValue = (uint8_t)(ui8PixelIndex / ui32ActivePaletteSize);
@@ -827,11 +849,7 @@ int main(int argc, char *argv[])
                         if (fwrite(&ui8OutputByte, 1, 1, fpExtracted) != 1)
                         {
                             printf("Error writing extracted file.\n");
-                            fclose(fpExtracted);
-                            remove(sExtractedFileName);
-                            free(sExtractedFileName);
-                            fclose(fpStego);
-                            return 1;
+                            goto extract_cleanup;
                         }
                         ui8OutputByte = 0;
                         iOutputBits = 0;
@@ -842,11 +860,7 @@ int main(int argc, char *argv[])
             if (ui64PayloadBitsRead < ui64HiddenSizeBits && fseek(fpStego, ui32PaddingSize, SEEK_CUR) != 0)
             {
                 printf("Error seeking past stego row padding.\n");
-                fclose(fpExtracted);
-                remove(sExtractedFileName);
-                free(sExtractedFileName);
-                fclose(fpStego);
-                return 1;
+                goto extract_cleanup;
             }
         }
 
@@ -856,29 +870,52 @@ int main(int argc, char *argv[])
             if (fwrite(&ui8OutputByte, 1, 1, fpExtracted) != 1)
             {
                 printf("Error writing final extracted byte.\n");
-                fclose(fpExtracted);
-                remove(sExtractedFileName);
-                free(sExtractedFileName);
-                fclose(fpStego);
-                return 1;
+                goto extract_cleanup;
             }
         }
 
         if (ui64PayloadBitsRead != ui64HiddenSizeBits)
         {
             printf("Error: stego file ended before the hidden message was complete.\n");
+            goto extract_cleanup;
+        }
+        printf("Extracted %llu hidden bits to %s\n", (unsigned long long)ui64HiddenSizeBits, sExtractedFileName);
+        
+        iExtractResult = 0;
+        
+        extract_cleanup:
+
+        if (fpExisting != NULL)
+        {
+            fclose(fpExisting);
+            fpExisting = NULL;
+        }
+        if (fpExtracted != NULL)
+        {
             fclose(fpExtracted);
-            remove(sExtractedFileName);
-            free(sExtractedFileName);
+            fpExtracted = NULL;
+        }
+        if (fpStego != NULL)
+        {
             fclose(fpStego);
+            fpStego = NULL;
+        }
+        if (iExtractResult != 0 && sExtractedFileName != NULL)
+        {
+            // remove incomplete output file created before the error
+            remove(sExtractedFileName);
+        }
+
+        if (sExtractedFileName != NULL)
+        {
+            free(sExtractedFileName);
+            sExtractedFileName = NULL;
+        }
+        if (iExtractResult != 0)
+        {
             return 1;
         }
 
-        fclose(fpExtracted);
-        fclose(fpStego);
-
-        printf("Extracted %llu hidden bits to %s\n", (unsigned long long)ui64HiddenSizeBits, sExtractedFileName);
-        free(sExtractedFileName);
     }
     else if (strcmp(argv[1], "-capacity") == 0)
     {
@@ -889,11 +926,12 @@ int main(int argc, char *argv[])
             return 1;
         }
 
+        int iCapacityResult = 1;
         FILE *fpCover = fopen(sCoverFile, "rb");
         if (fpCover == NULL)
         {
             printf("Error opening cover file %s\n", sCoverFile);
-            return 1;
+            goto capacity_cleanup;
         }
 
         uint8_t  ui8FileSignature[2];
@@ -917,8 +955,7 @@ int main(int argc, char *argv[])
             fread(&ui32CoverCompression, sizeof(ui32CoverCompression), 1, fpCover) != 1)
         {
             printf("Error reading bitmap header.\n");
-            fclose(fpCover);
-            return 1;
+            goto capacity_cleanup;
         }
 
         if (ui8FileSignature[0] != 'B' ||
@@ -930,8 +967,7 @@ int main(int argc, char *argv[])
             i32CoverHeight == INT32_MIN)
         {
             printf("Error: capacity requires an uncompressed 8-bit bitmap cover file.\n");
-            fclose(fpCover);
-            return 1;
+            goto capacity_cleanup;
         }
 
         uint32_t ui32CoverWidth = (uint32_t)i32CoverWidth;
@@ -945,8 +981,7 @@ int main(int argc, char *argv[])
         if (fseek(fpCover, ui32CoverPixelOffset, SEEK_SET) != 0)
         {
             printf("Error seeking to bitmap pixel data.\n");
-            fclose(fpCover);
-            return 1;
+            goto capacity_cleanup;
         }
 
         for (uint32_t ui32Row = 0;
@@ -962,8 +997,7 @@ int main(int argc, char *argv[])
                 if (fread(&ui8PixelIndex, 1, 1, fpCover) != 1)
                 {
                     printf("Error reading bitmap pixel data.\n");
-                    fclose(fpCover);
-                    return 1;
+                    goto capacity_cleanup;
                 }
 
                 if (!bCoverIndexUsed[ui8PixelIndex])
@@ -976,12 +1010,10 @@ int main(int argc, char *argv[])
             if (fseek(fpCover, ui32PaddingSize, SEEK_CUR) != 0)
             {
                 printf("Error seeking past bitmap row padding.\n");
-                fclose(fpCover);
-                return 1;
+                goto capacity_cleanup;
             }
         }
 
-        fclose(fpCover);
 
         int iMaxBitsPerPixel = 0;
 
@@ -994,7 +1026,8 @@ int main(int argc, char *argv[])
         if (iMaxBitsPerPixel == 0)
         {
             printf("Active Colors: %u (too many for palette duplication)\n", ui32ActivePaletteSize);
-            return 0;
+            iCapacityResult = 0;
+            goto capacity_cleanup;
         }
 
         printf("Active Colors: %u (max %d-bit hiding)\n", ui32ActivePaletteSize, iMaxBitsPerPixel);
@@ -1013,6 +1046,19 @@ int main(int argc, char *argv[])
                 ui64CapacityBytes = (ui64CapacityBits - 64U) / 8U;
 
             printf("-b %d capacity: %llu bytes\n", iBits, (unsigned long long)ui64CapacityBytes);
+        }
+
+        iCapacityResult = 0;
+
+        capacity_cleanup:
+        if (fpCover != NULL)
+        {
+            fclose(fpCover);
+            fpCover = NULL;
+        }
+        if (iCapacityResult != 0)
+        {
+            return 1;
         }
     }
     else
