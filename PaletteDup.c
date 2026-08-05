@@ -31,9 +31,10 @@ void printUsageHelp(char * prog)
     printf("   -o <output file>              Stego file name to output (optional when hiding)\n");
     printf("   -s <stego file>               Stego file for extraction\n");
     printf("   -b <bits per pixel (1-3)>     Number of bits hidden per pixel in stego file\n");
+    printf("   -mod                          Modify duplicate colors in palette to reduce color duplication\n");
     printf("\n");
     printf("To hide file data inside an 8-bit paletted bitmap:\n");
-    printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-o <stego output file>]\n", prog);
+    printf("   %s -hide -m <message file> -c <cover file> -b <1|2|3> [-mod] [-o <stego output file>]\n", prog);
     printf("\n");
     printf("To extract previously hidden data:\n");
     printf("   %s -extract -s <stego file> -b <1|2|3>\n", prog);
@@ -57,6 +58,7 @@ int main(int argc, char *argv[])
     char *sStegoFile = NULL;
     int iBitsPerPixel = 0;
     bool bIsRandomMessage = false;
+    bool bModifyDuplicateColors = false;
 
     // read and parse arguments
     for (int i = 2; i < argc; i++)
@@ -127,6 +129,10 @@ int main(int argc, char *argv[])
                 printf("   -b <1|2|3>\n");
                 return 1;
             }
+        }
+        else if (strcmp(argv[i], "-mod") == 0)
+        {
+            bModifyDuplicateColors = true;
         }
         else
         {
@@ -242,6 +248,18 @@ int main(int argc, char *argv[])
         uint32_t ui32ActivePaletteSize = 0;
         uint8_t ui8PixelIndex;
 
+        const uint8_t ui8ColorModMask[8] =
+        {
+            0x00, // unchanged
+            0x01, // flip R
+            0x02, // flip G
+            0x04, // flip B
+            0x03, // flip R + G
+            0x06, // flip G + B
+            0x05, // flip R + B
+            0x07  // flip R + G + B
+        };
+
         // loop through cover pixels to count used colors in the palette
         if (fseek(fpCover, ui32CoverPixelOffset, SEEK_SET) != 0)
         {
@@ -340,6 +358,16 @@ int main(int argc, char *argv[])
                     {
                         printf("Error copying palette entry in cover file.\n");
                         goto hide_cleanup;
+                    }
+                    if (bModifyDuplicateColors && paletteNum > 0)
+                    {
+                        uint8_t ui8ModMask = ui8ColorModMask[paletteNum];
+                        if ((ui8ModMask & 0x01U) != 0)
+                            ui8PaletteEntry[2] ^= 0x01U; // flip R
+                        if ((ui8ModMask & 0x02U) != 0)
+                            ui8PaletteEntry[1] ^= 0x01U; // flip G
+                        if ((ui8ModMask & 0x04U) != 0)
+                            ui8PaletteEntry[0] ^= 0x01U; // flip B
                     }
                     if (fwrite(ui8PaletteEntry, 1, 4, fpOutput) != 4)
                     {
